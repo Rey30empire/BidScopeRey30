@@ -21,6 +21,7 @@ Required values:
 
 Optional values:
 
+- `NETLIFY_DATABASE_URL`
 - `OPENAI_MODEL`
 - `APP_BASE_URL`
 - `EMAIL_PROVIDER_NAME`
@@ -49,8 +50,8 @@ The repo includes `netlify.toml` with a build command that generates Prisma usin
 
 Recommended deploy setup:
 
-1. Create a Neon PostgreSQL database.
-2. Set Netlify `DATABASE_URL` to the Neon connection string.
+1. Create or connect a Netlify DB / Neon database.
+2. Let Netlify inject `NETLIFY_DATABASE_URL` for hosted builds.
 3. Set `OPENAI_API_KEY` and any email settings in Netlify environment variables.
 4. Deploy from this repo root.
 
