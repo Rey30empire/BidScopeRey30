@@ -376,6 +376,41 @@ function uniqueStrings(values: string[]): string[] {
   );
 }
 
+function normalizeTradeToken(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function findTradeOption(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = normalizeTradeToken(value);
+  if (!normalized) {
+    return null;
+  }
+
+  return TRADE_OPTIONS.find((tradeOption) => {
+    if (tradeOption.value === normalized) {
+      return true;
+    }
+
+    if (normalizeTradeToken(tradeOption.label) === normalized) {
+      return true;
+    }
+
+    return tradeOption.keywords.some((keyword) => {
+      const normalizedKeyword = normalizeTradeToken(keyword);
+      return normalized.includes(normalizedKeyword) || normalizedKeyword.includes(normalized);
+    });
+  }) ?? null;
+}
+
 // POST /api/projects/[id]/analyze - Trigger analysis
 export async function POST(
   request: NextRequest,
@@ -412,9 +447,10 @@ export async function POST(
 
     void (async () => {
       try {
-        const tradeConfig = TRADE_OPTIONS.find((tradeOption) => tradeOption.value === project.trade);
-        const tradeKeywords = [...(tradeConfig?.keywords ?? [])];
-        const tradeLabel = tradeConfig?.label || project.trade || 'General';
+        const selectedTrade = findTradeOption(project.trade);
+        let tradeKeywords = [...(selectedTrade?.keywords ?? [])];
+        let tradeLabel = selectedTrade?.label || project.trade || 'General';
+        let storedTradeValue = selectedTrade?.value || project.trade || null;
 
         let extractedMetadata: ExtractedMetadata = {};
         const fileContents: FileExcerpt[] = [];
@@ -444,6 +480,16 @@ export async function POST(
               console.error(`Metadata extraction failed for ${file.originalName}:`, error);
             }
           }
+        }
+
+        const inferredTrade = findTradeOption(extractedMetadata.trade);
+        if (inferredTrade) {
+          tradeKeywords = [...inferredTrade.keywords];
+          tradeLabel = inferredTrade.label;
+          storedTradeValue = inferredTrade.value;
+        } else if (!storedTradeValue && extractedMetadata.trade) {
+          tradeLabel = extractedMetadata.trade;
+          storedTradeValue = extractedMetadata.trade;
         }
 
         await db.analysis.upsert({
@@ -701,6 +747,9 @@ export async function POST(
         }
         if (extractedMetadata.projectSize) {
           projectUpdate.projectSize = String(extractedMetadata.projectSize);
+        }
+        if (storedTradeValue) {
+          projectUpdate.trade = storedTradeValue;
         }
 
         const bidDueDate = safeDate(extractedMetadata.bidDueDate);

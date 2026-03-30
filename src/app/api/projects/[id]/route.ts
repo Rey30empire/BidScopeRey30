@@ -1,6 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 
+function parseOptionalDate(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function toAnalysisDateString(value: string | null | undefined) {
+  const parsed = parseOptionalDate(value);
+  return parsed ? parsed.toISOString() : null;
+}
+
 // GET /api/projects/[id] - Get project with files and analysis
 export async function GET(
   request: NextRequest,
@@ -35,24 +49,48 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await request.json();
+    const projectData = {
+      ...(body.name !== undefined && { name: body.name }),
+      ...(body.client !== undefined && { client: body.client }),
+      ...(body.location !== undefined && { location: body.location }),
+      ...(body.address !== undefined && { address: body.address }),
+      ...(body.city !== undefined && { city: body.city }),
+      ...(body.state !== undefined && { state: body.state }),
+      ...(body.zip !== undefined && { zip: body.zip }),
+      ...(body.projectSize !== undefined && { projectSize: body.projectSize }),
+      ...(body.trade !== undefined && { trade: body.trade }),
+      ...(body.bidDueDate !== undefined && { bidDueDate: parseOptionalDate(body.bidDueDate) }),
+      ...(body.rfiDueDate !== undefined && { rfiDueDate: parseOptionalDate(body.rfiDueDate) }),
+      ...(body.notes !== undefined && { notes: body.notes }),
+      ...(body.status !== undefined && { status: body.status }),
+    };
 
-    const project = await db.project.update({
-      where: { id },
-      data: {
-        ...(body.name !== undefined && { name: body.name }),
-        ...(body.client !== undefined && { client: body.client }),
-        ...(body.location !== undefined && { location: body.location }),
-        ...(body.address !== undefined && { address: body.address }),
-        ...(body.city !== undefined && { city: body.city }),
-        ...(body.state !== undefined && { state: body.state }),
-        ...(body.zip !== undefined && { zip: body.zip }),
-        ...(body.projectSize !== undefined && { projectSize: body.projectSize }),
-        ...(body.trade !== undefined && { trade: body.trade }),
-        ...(body.bidDueDate !== undefined && { bidDueDate: body.bidDueDate ? new Date(body.bidDueDate) : null }),
-        ...(body.rfiDueDate !== undefined && { rfiDueDate: body.rfiDueDate ? new Date(body.rfiDueDate) : null }),
-        ...(body.notes !== undefined && { notes: body.notes }),
-        ...(body.status !== undefined && { status: body.status }),
-      },
+    const analysisData = {
+      ...(body.name !== undefined && { projectName: body.name || null }),
+      ...(body.client !== undefined && { client: body.client || null }),
+      ...(body.address !== undefined && { address: body.address || null }),
+      ...(body.city !== undefined && { city: body.city || null }),
+      ...(body.state !== undefined && { state: body.state || null }),
+      ...(body.zip !== undefined && { zipCode: body.zip || null }),
+      ...(body.trade !== undefined && { trade: body.trade || null }),
+      ...(body.bidDueDate !== undefined && { bidDueDate: toAnalysisDateString(body.bidDueDate) }),
+      ...(body.rfiDueDate !== undefined && { rfiDueDate: toAnalysisDateString(body.rfiDueDate) }),
+    };
+
+    const project = await db.$transaction(async (tx) => {
+      const updatedProject = await tx.project.update({
+        where: { id },
+        data: projectData,
+      });
+
+      if (Object.keys(analysisData).length > 0) {
+        await tx.analysis.update({
+          where: { projectId: id },
+          data: analysisData,
+        }).catch(() => undefined);
+      }
+
+      return updatedProject;
     });
 
     return NextResponse.json(project);

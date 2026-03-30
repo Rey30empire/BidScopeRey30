@@ -109,6 +109,42 @@ function formatDate(dateStr: string | null | undefined): string {
   }
 }
 
+function toDateInputValue(dateStr: string | null | undefined): string {
+  if (!dateStr) return ''
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr
+
+  const parsed = new Date(dateStr)
+  if (Number.isNaN(parsed.getTime())) return ''
+
+  return parsed.toISOString().slice(0, 10)
+}
+
+function deriveProjectNameFromFiles(files: File[]): string {
+  const firstFolderPath = files.find((file) => file.webkitRelativePath)?.webkitRelativePath
+  if (firstFolderPath) {
+    const folderName = firstFolderPath.split('/').filter(Boolean)[0]
+    if (folderName) {
+      return folderName
+    }
+  }
+
+  const zipFile = files.find((file) => file.name.toLowerCase().endsWith('.zip'))
+  if (zipFile) {
+    return zipFile.name.replace(/\.[^.]+$/, '')
+  }
+
+  if (files.length === 1) {
+    return files[0].name.replace(/\.[^.]+$/, '')
+  }
+
+  return `Bid Intake ${new Date().toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })}`
+}
+
 function parseJSON<T>(str: string | null | undefined): T | null {
   if (!str) return null
   try {
@@ -272,9 +308,7 @@ function Header() {
                 } else if (currentStep === 'trade') {
                   setStep('upload')
                 } else if (currentStep === 'upload') {
-                  if (currentProject) {
-                    setStep('list')
-                  }
+                  setStep('list')
                 } else {
                   setStep('list')
                 }
@@ -348,7 +382,17 @@ function ProjectListView() {
 
   const handleViewProject = (project: ProjectData) => {
     setCurrentProject(project)
-    setStep('results')
+    if (project.status === 'processing') {
+      setStep('processing')
+      return
+    }
+
+    setStep(project.analysis ? 'results' : 'upload')
+  }
+
+  const handleNewIntake = () => {
+    setCurrentProject(null)
+    setStep('upload')
   }
 
   const handleDelete = async (id: string) => {
@@ -368,11 +412,11 @@ function ProjectListView() {
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
-          <p className="text-sm text-muted-foreground">Manage your bid analyses</p>
+          <p className="text-sm text-muted-foreground">Upload a bid package and let the intake pipeline fill the project for you</p>
         </div>
-        <Button onClick={() => setStep('create')} className="gap-2">
+        <Button onClick={handleNewIntake} className="gap-2">
           <Plus className="size-4" />
-          New Project
+          New Intake
         </Button>
       </div>
 
@@ -395,9 +439,9 @@ function ProjectListView() {
           <p className="mb-6 max-w-sm text-center text-sm text-muted-foreground">
             {APP_SUMMARY}
           </p>
-          <Button onClick={() => setStep('create')} className="gap-2">
+          <Button onClick={handleNewIntake} className="gap-2">
             <Plus className="size-4" />
-            New Project
+            Start Intake
           </Button>
         </motion.div>
       ) : (
@@ -684,62 +728,132 @@ function CreateProjectView() {
 // VIEW 3: Upload Files
 // ══════════════════════════════════════════════════════════════════════════
 function UploadFilesView() {
-  const { currentProject, updateCurrentProject, updateProjectFiles, setStep } = useProjectStore()
+  const {
+    currentProject,
+    addProject,
+    setCurrentProject,
+    updateCurrentProject,
+    updateProjectFiles,
+    setStep,
+    setIsAnalyzing,
+  } = useProjectStore()
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [dragOver, setDragOver] = useState(false)
+  const [stageMessage, setStageMessage] = useState('Drop a bid package to begin')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
 
   const files = currentProject?.files ?? []
 
-  const uploadFiles = async (fileList: FileList | File[]) => {
-    if (!currentProject) return
+  useEffect(() => {
+    const folderInput = folderInputRef.current
+    if (!folderInput) return
 
+    folderInput.setAttribute('webkitdirectory', '')
+    folderInput.setAttribute('directory', '')
+  }, [])
+
+  const ensureProject = async (filesArr: File[]) => {
+    if (currentProject) {
+      return currentProject
+    }
+
+    setStageMessage('Creating an intake workspace...')
+
+    const res = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: deriveProjectNameFromFiles(filesArr),
+      }),
+    })
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || 'Could not create the intake workspace')
+    }
+
+    const project = await res.json()
+    addProject(project)
+    setCurrentProject(project)
+    return project as ProjectData
+  }
+
+  const refreshProject = async (projectId: string) => {
+    const projectRes = await fetch(`/api/projects/${projectId}`)
+    if (!projectRes.ok) {
+      return null
+    }
+
+    const updated = await projectRes.json()
+    updateCurrentProject(updated)
+    updateProjectFiles(projectId, updated.files ?? [])
+    return updated as ProjectData
+  }
+
+  const startAutomaticAnalysis = async (projectId: string) => {
+    setStageMessage('Launching the hidden analysis pipeline...')
+
+    const res = await fetch(`/api/projects/${projectId}/analyze`, {
+      method: 'POST',
+    })
+    const data = await res.json().catch(() => ({}))
+
+    if (!res.ok) {
+      throw new Error(data.error || 'Could not start automatic analysis')
+    }
+
+    updateCurrentProject({ status: 'processing' })
+    setIsAnalyzing(true)
+    setStep('processing')
+    toast.success('Files received. BitScopeRey30 is filling the project automatically.')
+  }
+
+  const uploadFiles = async (fileList: FileList | File[]) => {
     const filesArr = Array.from(fileList)
     if (filesArr.length === 0) return
 
     setUploading(true)
-    setUploadProgress(10)
+    setUploadProgress(8)
 
     try {
+      const projectForUpload = await ensureProject(filesArr)
+
       // Upload all files in a single request
       const formData = new FormData()
       for (const file of filesArr) {
         formData.append('files', file)
       }
 
-      setUploadProgress(30)
+      setStageMessage('Uploading files and unpacking archives...')
+      setUploadProgress(28)
 
-      const res = await fetch(`/api/projects/${currentProject.id}/files`, {
+      const res = await fetch(`/api/projects/${projectForUpload.id}/files`, {
         method: 'POST',
         body: formData,
       })
 
-      setUploadProgress(70)
+      setUploadProgress(72)
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        toast.error(err.error || 'Upload failed')
-        return
+        throw new Error(err.error || 'Upload failed')
       }
 
-      setUploadProgress(90)
-
-      // Refresh project data to get updated files
-      const projectRes = await fetch(`/api/projects/${currentProject.id}`)
-      if (projectRes.ok) {
-        const updated = await projectRes.json()
-        updateCurrentProject(updated)
-        updateProjectFiles(currentProject.id, updated.files ?? [])
-      }
+      setStageMessage('Refreshing project intake...')
+      setUploadProgress(88)
+      await refreshProject(projectForUpload.id)
 
       setUploadProgress(100)
-      toast.success(`${filesArr.length} file(s) uploaded successfully`)
-    } catch {
-      toast.error('Upload failed')
+      await startAutomaticAnalysis(projectForUpload.id)
+    } catch (error) {
+      setIsAnalyzing(false)
+      toast.error(error instanceof Error ? error.message : 'Upload failed')
     } finally {
       setUploading(false)
       setUploadProgress(0)
+      setStageMessage('Drop a bid package to begin')
     }
   }
 
@@ -771,11 +885,46 @@ function UploadFilesView() {
   return (
     <motion.div {...pageVariants} transition={pageTransition} className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight">Upload Files</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Start Intake</h1>
         <p className="text-sm text-muted-foreground">
-          {currentProject?.name ?? 'Project'} &mdash; Add bid documents for analysis
+          Upload a ZIP, folder, or bid files. The app will classify documents, infer trade and dates, and build the project automatically.
         </p>
       </div>
+
+      <Card className="mb-6 border-dashed">
+        <CardContent className="space-y-3 p-5 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">
+            {currentProject?.name
+              ? `Continuing intake for ${currentProject.name}.`
+              : 'No manual setup is required before upload.'}
+          </p>
+          <p>
+            Drop the package first. BitScopeRey30 will parse the documents behind the scenes, fill the project fields, and send you to review only after the pipeline finishes.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="gap-2"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+            >
+              <Upload className="size-4" />
+              Choose Files / ZIP
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="gap-2"
+              onClick={() => folderInputRef.current?.click()}
+              disabled={uploading}
+            >
+              <FolderSync className="size-4" />
+              Choose Folder
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Drop Zone */}
       <div
@@ -797,21 +946,28 @@ function UploadFilesView() {
           className="hidden"
           onChange={handleFileSelect}
         />
+        <input
+          ref={folderInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={handleFileSelect}
+        />
         <div className="mb-3 flex size-14 items-center justify-center rounded-full bg-muted">
           <Upload className="size-7 text-muted-foreground" />
         </div>
         <p className="mb-1 text-sm font-medium">
-          {dragOver ? 'Drop files here' : 'Drag & drop files or click to browse'}
+          {dragOver ? 'Drop the package here' : 'Drag & drop a ZIP or bid files'}
         </p>
         <p className="text-xs text-muted-foreground">
-          Supports PDF, DOCX, XLSX, CSV, TXT, ZIP, and images &middot; Max 500MB per file
+          Supports PDF, DOCX, XLSX, CSV, TXT, ZIP, and images. Use the folder button for a full directory upload.
         </p>
 
         {uploading && (
           <div className="mt-4 w-full max-w-xs">
             <Progress value={uploadProgress} className="h-2" />
             <p className="mt-1 text-center text-xs text-muted-foreground">
-              Uploading... {uploadProgress}%
+              {stageMessage} {uploadProgress}%
             </p>
           </div>
         )}
@@ -869,12 +1025,11 @@ function UploadFilesView() {
       <div className="mt-6 flex justify-between">
         <Button variant="outline" onClick={() => setStep('list')} className="gap-2">
           <ArrowLeft className="size-4" />
-          Back
+          Back to Projects
         </Button>
-        <Button onClick={() => setStep('trade')} className="gap-2" disabled={files.length === 0}>
-          Continue to Trade Selection
-          <ArrowRight className="size-4" />
-        </Button>
+        <p className="max-w-sm text-right text-xs text-muted-foreground">
+          If the pipeline misses a field, you can edit it on the review screen after analysis finishes.
+        </p>
       </div>
     </motion.div>
   )
@@ -2155,9 +2310,185 @@ function InfoItem({ icon, label, value }: { icon: React.ReactNode; label: string
   )
 }
 
+function ProjectReviewCard({
+  project,
+  onUpdated,
+}: {
+  project: ProjectData
+  onUpdated: (project: Partial<ProjectData>) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({
+    name: project.name || project.analysis?.projectName || '',
+    client: project.client || project.analysis?.client || '',
+    trade: project.trade || project.analysis?.trade || '',
+    address: project.address || project.analysis?.address || '',
+    city: project.city || project.analysis?.city || '',
+    state: project.state || project.analysis?.state || '',
+    zip: project.zip || project.analysis?.zipCode || '',
+    bidDueDate: toDateInputValue(project.bidDueDate || project.analysis?.bidDueDate),
+    rfiDueDate: toDateInputValue(project.rfiDueDate || project.analysis?.rfiDueDate),
+    notes: project.notes || '',
+  })
+
+  useEffect(() => {
+    setForm({
+      name: project.name || project.analysis?.projectName || '',
+      client: project.client || project.analysis?.client || '',
+      trade: project.trade || project.analysis?.trade || '',
+      address: project.address || project.analysis?.address || '',
+      city: project.city || project.analysis?.city || '',
+      state: project.state || project.analysis?.state || '',
+      zip: project.zip || project.analysis?.zipCode || '',
+      bidDueDate: toDateInputValue(project.bidDueDate || project.analysis?.bidDueDate),
+      rfiDueDate: toDateInputValue(project.rfiDueDate || project.analysis?.rfiDueDate),
+      notes: project.notes || '',
+    })
+  }, [project])
+
+  const updateField = (field: keyof typeof form, value: string) => {
+    setForm((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+
+    try {
+      const patchRes = await fetch(`/api/projects/${project.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: form.name.trim() || project.name,
+          client: form.client.trim() || null,
+          trade: form.trade.trim() || null,
+          address: form.address.trim() || null,
+          city: form.city.trim() || null,
+          state: form.state.trim() || null,
+          zip: form.zip.trim() || null,
+          bidDueDate: form.bidDueDate || null,
+          rfiDueDate: form.rfiDueDate || null,
+          notes: form.notes.trim() || null,
+        }),
+      })
+
+      if (!patchRes.ok) {
+        const err = await patchRes.json().catch(() => ({}))
+        throw new Error(err.error || 'Could not update project details')
+      }
+
+      const projectRes = await fetch(`/api/projects/${project.id}`)
+      if (!projectRes.ok) {
+        throw new Error('Project updated, but refresh failed')
+      }
+
+      const refreshed = await projectRes.json()
+      onUpdated(refreshed)
+      setEditing(false)
+      toast.success('Review fields updated')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update project details')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card className="mb-6">
+      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <CardTitle className="text-base">Review Auto-Filled Details</CardTitle>
+          <CardDescription>
+            The intake pipeline filled these fields from the package. Correct anything that looks off before you export or email.
+          </CardDescription>
+        </div>
+        <Button
+          type="button"
+          variant={editing ? 'secondary' : 'outline'}
+          size="sm"
+          className="gap-2"
+          onClick={() => setEditing((value) => !value)}
+        >
+          {editing ? <X className="size-4" /> : <RefreshCw className="size-4" />}
+          {editing ? 'Close Editor' : 'Edit Review Fields'}
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!editing ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <InfoItem icon={<Building2 className="size-4" />} label="Client" value={project.client || project.analysis?.client} />
+            <InfoItem icon={<Wrench className="size-4" />} label="Trade" value={project.trade || project.analysis?.trade} />
+            <InfoItem
+              icon={<MapPin className="size-4" />}
+              label="Location"
+              value={[project.address || project.analysis?.address, project.city || project.analysis?.city, project.state || project.analysis?.state, project.zip || project.analysis?.zipCode]
+                .filter(Boolean)
+                .join(', ') || '—'}
+            />
+            <InfoItem icon={<Calendar className="size-4" />} label="Bid Due" value={formatDate(project.bidDueDate || project.analysis?.bidDueDate)} />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="review-name">Project Name</Label>
+                <Input id="review-name" value={form.name} onChange={(e) => updateField('name', e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="review-client">Client / GC</Label>
+                <Input id="review-client" value={form.client} onChange={(e) => updateField('client', e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="review-trade">Trade</Label>
+                <Input id="review-trade" value={form.trade} onChange={(e) => updateField('trade', e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="review-address">Address</Label>
+                <Input id="review-address" value={form.address} onChange={(e) => updateField('address', e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="review-city">City</Label>
+                <Input id="review-city" value={form.city} onChange={(e) => updateField('city', e.target.value)} />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="review-state">State</Label>
+                  <Input id="review-state" value={form.state} onChange={(e) => updateField('state', e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="review-zip">ZIP</Label>
+                  <Input id="review-zip" value={form.zip} onChange={(e) => updateField('zip', e.target.value)} />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="review-bid-date">Bid Due</Label>
+                <Input id="review-bid-date" type="date" value={form.bidDueDate} onChange={(e) => updateField('bidDueDate', e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="review-rfi-date">RFI Due</Label>
+                <Input id="review-rfi-date" type="date" value={form.rfiDueDate} onChange={(e) => updateField('rfiDueDate', e.target.value)} />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="review-notes">Notes</Label>
+              <Textarea id="review-notes" rows={3} value={form.notes} onChange={(e) => updateField('notes', e.target.value)} />
+            </div>
+            <div className="flex justify-end">
+              <Button type="button" onClick={handleSave} disabled={saving} className="gap-2">
+                {saving ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                Save Review Fields
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 // ── Full Results View ─────────────────────────────────────────────────────
 function ResultsView() {
-  const { currentProject, setStep, setCurrentProject } = useProjectStore()
+  const { currentProject, setStep, setCurrentProject, updateCurrentProject } = useProjectStore()
   const [loading, setLoading] = useState(true)
 
   // Fetch fresh project data on mount
@@ -2317,6 +2648,8 @@ function ResultsView() {
           </Button>
         </div>
       </div>
+
+      <ProjectReviewCard project={currentProject} onUpdated={updateCurrentProject} />
 
       {/* Tabs */}
       <Tabs defaultValue="summary" className="space-y-4">
