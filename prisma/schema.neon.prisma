@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  client      String?
+  location    String?
+  address     String?
+  city        String?
+  state       String?
+  zip         String?
+  projectSize String?
+  trade       String?
+  status      String   @default("upload")
+  bidDueDate  DateTime?
+  rfiDueDate  DateTime?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  files    BidFile[]
+  analysis Analysis?
+}
+
+model BidFile {
+  id             String   @id @default(cuid())
+  projectId      String
+  originalName   String
+  fileName       String
+  filePath       String
+  fileType       String
+  fileSize       Int
+  mimeType       String?
+  hash           String?
+  category       String?
+  relevanceScore Float?
+  summary        String?
+  sheetData      String?
+  metadata       String?
+  isRelevant     Boolean?
+  isProcessed    Boolean  @default(false)
+  error          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Analysis {
+  id                  String   @id @default(cuid())
+  projectId           String   @unique
+  projectName         String?
+  client              String?
+  contact             String?
+  email               String?
+  bidDueDate          String?
+  rfiDueDate          String?
+  address             String?
+  city                String?
+  state               String?
+  zipCode             String?
+  trade               String?
+  scopeHints          String?
+  alternates          String?
+  allowances          String?
+  proposalReqs        String?
+  insuranceReqs       String?
+  scheduleConstraints String?
+  addendaNotes        String?
+  keySpecs            String?
+  materials           String?
+  relevantSheets      String?
+  scopeAnalysis       String?
+  weatherImpact       String?
+  timeEstimate        String?
+  executiveSummary    String?
+  riskItems           String?
+  rfiSuggestions      String?
+  costEstimate        String?
+  inclusions          String?
+  exclusions          String?
+  confidence          Float?
+  status              String   @default("pending")
+  error               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Settings {
+  id        String   @id @default("default")
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

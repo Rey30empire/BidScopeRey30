@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">BitScopeRey30 logo</title>
+  <desc id="desc">Hexagonal blueprint badge for BitScopeRey30.</desc>
+  <defs>
+    <linearGradient id="bg" x1="32" y1="24" x2="224" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1a365d" />
+      <stop offset="1" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="accent" x1="52" y1="52" x2="204" y2="204" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f97316" />
+      <stop offset="1" stop-color="#fb923c" />
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="#f4f1ea" />
+  <path d="M128 24 212 72v112l-84 48-84-48V72l84-48Z" fill="url(#bg)" />
+  <path d="M128 44 194 82v92l-66 38-66-38V82l66-38Z" fill="none" stroke="#f8fafc" stroke-opacity=".18" stroke-width="4" />
+  <path d="M76 86h104M76 126h104M76 166h66" stroke="#38bdf8" stroke-opacity=".35" stroke-width="4" stroke-linecap="round" />
+  <path d="M92 70v116M128 58v128M164 70v80" stroke="#38bdf8" stroke-opacity=".18" stroke-width="4" stroke-linecap="round" />
+  <path d="M94 170V86h41c24 0 39 13 39 33 0 18-11 30-28 34l36 39h-28l-32-36h-8v36H94Zm20-53h18c14 0 22-6 22-17 0-10-8-15-22-15h-18v32Z" fill="#f8fafc" />
+  <path d="M74 188h108" stroke="url(#accent)" stroke-width="8" stroke-linecap="round" />
+  <circle cx="188" cy="188" r="14" fill="url(#accent)" />
+</svg>

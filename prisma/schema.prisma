@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  client      String?
+  location    String?
+  address     String?
+  city        String?
+  state       String?
+  zip         String?
+  projectSize String?
+  trade       String?
+  status      String   @default("upload") // upload | processing | complete | error
+  bidDueDate  DateTime?
+  rfiDueDate  DateTime?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  files    BidFile[]
+  analysis Analysis?
+}
+
+model BidFile {
+  id           String   @id @default(cuid())
+  projectId    String
+  originalName String
+  fileName     String
+  filePath     String
+  fileType     String   // pdf, docx, xlsx, csv, txt, image, zip, other
+  fileSize     Int
+  mimeType     String?
+  hash         String?
+  category     String?  // drawings, addenda, specifications, civil, structural, architectural, mep, site, geotech, fire_protection, bid_forms, rfi, irrelevant
+  relevanceScore Float?  // 0-1 relevance score
+  summary      String?  // AI-generated summary
+  sheetData    String?  // JSON: detected sheets/titles
+  metadata     String?  // JSON: extracted metadata
+  isRelevant   Boolean?
+  isProcessed  Boolean  @default(false)
+  error        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Analysis {
+  id              String   @id @default(cuid())
+  projectId       String   @unique
+  projectName     String?
+  client          String?
+  contact         String?
+  email           String?
+  bidDueDate      String?
+  rfiDueDate      String?
+  address         String?
+  city            String?
+  state           String?
+  zipCode         String?
+  trade           String?
+  scopeHints      String?  // JSON
+  alternates      String?  // JSON
+  allowances      String?  // JSON
+  proposalReqs    String?  // JSON
+  insuranceReqs   String?  // JSON
+  scheduleConstraints String? // JSON
+  addendaNotes    String?  // JSON
+  keySpecs        String?  // JSON
+  materials       String?  // JSON
+  relevantSheets  String?  // JSON
+  scopeAnalysis   String?  // JSON: { probableScope, priorityDocs, keySheets, keySpecs, risks, exclusions, rfis }
+  weatherImpact   String?  // JSON
+  timeEstimate    String?  // JSON
+  executiveSummary String? // JSON
+  riskItems       String?  // JSON
+  rfiSuggestions  String?  // JSON
+  costEstimate    String?  // JSON
+  inclusions      String?  // JSON
+  exclusions      String?  // JSON
+  confidence      Float?   // 0-1
+  status          String   @default("pending") // pending | processing | complete | error
+  error           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Settings {
+  id    String @id @default("default")
+  key   String @unique
+  value String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
