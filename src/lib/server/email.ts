@@ -14,9 +14,19 @@ interface SendEmailOptions {
 }
 
 const DEFAULT_PROVIDER = 'resend';
+const DEFAULT_RESEND_FROM = 'BitScopeRey30 <onboarding@resend.dev>';
 
 function getProviderName(): string {
   return (process.env.EMAIL_PROVIDER_NAME || DEFAULT_PROVIDER).trim().toLowerCase();
+}
+
+function getFromAddress(): string {
+  const provider = getProviderName();
+  if (provider === 'resend') {
+    return process.env.EMAIL_FROM?.trim() || DEFAULT_RESEND_FROM;
+  }
+
+  return process.env.EMAIL_FROM?.trim() || '';
 }
 
 export function getEmailConfigurationError(): string | null {
@@ -30,7 +40,7 @@ export function getEmailConfigurationError(): string | null {
     return 'EMAIL_PROVIDER_API_KEY is missing.';
   }
 
-  if (!process.env.EMAIL_FROM?.trim()) {
+  if (!getFromAddress()) {
     return 'EMAIL_FROM is missing.';
   }
 
@@ -57,7 +67,7 @@ export async function sendEstimateEmail(options: SendEmailOptions): Promise<{ id
       'Idempotency-Key': randomUUID(),
     },
     body: JSON.stringify({
-      from: process.env.EMAIL_FROM,
+      from: getFromAddress(),
       to: Array.isArray(options.to) ? options.to : [options.to],
       subject: options.subject,
       html: options.html,
