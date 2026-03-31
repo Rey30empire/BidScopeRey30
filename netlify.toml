@@ -1,5 +1,5 @@
 [build]
-  command = "bun install --frozen-lockfile && bunx prisma generate --schema prisma/schema.neon.prisma && bun run db:prepare:neon && bunx prisma db push --schema prisma/schema.neon.prisma && bun run build"
+  command = "bun install --frozen-lockfile && bunx prisma generate --schema prisma/schema.neon.prisma && bun run db:prepare:neon && bun run build"
 
 [build.environment]
   BUN_VERSION = "1.3.10"
