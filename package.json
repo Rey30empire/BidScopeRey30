@@ -12,6 +12,7 @@
     "db:push:neon": "prisma db push --schema prisma/schema.neon.prisma",
     "db:generate": "prisma generate",
     "db:generate:neon": "prisma generate --schema prisma/schema.neon.prisma",
+    "db:prepare:neon": "bun scripts/prepare-neon-estimate-schema.ts",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset"
   },
