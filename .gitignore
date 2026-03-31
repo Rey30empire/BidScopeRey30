@@ -48,6 +48,8 @@ test
 prompt
 
 server.log
+bat-run.log
+bat-test.log
 uploads/
 upload/
 download/

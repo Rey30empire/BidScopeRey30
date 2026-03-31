@@ -1,15 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile } from 'fs/promises';
+import { join } from 'path';
+import { pathToFileURL } from 'url';
 import { db } from '@/lib/db';
 import {
+  buildBatchClassificationPrompt,
+  buildBatchMetadataExtractionPrompt,
   buildClassificationPrompt,
   buildExecutiveSummaryPrompt,
-  buildMetadataExtractionPrompt,
   buildScopeAnalysisPrompt,
   buildTimeEstimatePrompt,
 } from '@/lib/prompts';
 import { TRADE_OPTIONS } from '@/lib/constants';
 import { generateJson, isOpenAIConfigured } from '@/lib/server/openai';
+import {
+  extractHeuristicMetadataFromDocuments,
+  type ExtractedMetadata,
+} from '@/lib/server/project-metadata-extraction';
 import { getWeatherImpact } from '@/lib/server/weather';
 import type {
   ExecutiveSummary,
@@ -19,25 +26,6 @@ import type {
   TimeEstimate,
   WeatherImpact,
 } from '@/lib/types';
-
-type ExtractedMetadata = Partial<{
-  projectName: string;
-  client: string;
-  contact: string;
-  email: string;
-  bidDueDate: string;
-  rfiDueDate: string;
-  address: string;
-  city: string;
-  state: string;
-  zipCode: string;
-  projectSize: string;
-  trade: string;
-  scopeHints: string[];
-  proposalReqs: string[];
-  insuranceReqs: string[];
-  scheduleConstraints: string[];
-}>;
 
 type ClassificationResult = {
   category?: string;
@@ -79,13 +67,39 @@ type FileExcerpt = {
   fileType: string;
 };
 
+type BatchClassificationResponse = {
+  documents?: Array<ClassificationResult & { fileId?: string }>;
+};
+
+const ANALYSIS_PROGRESS = {
+  extracting: { progress: 15, message: 'Reading uploaded documents...' },
+  classifying: { progress: 38, message: 'Classifying the bid package...' },
+  analyzing_scope: { progress: 62, message: 'Building the trade scope analysis...' },
+  analyzing_weather: { progress: 74, message: 'Checking weather and site conditions...' },
+  estimating_time: { progress: 86, message: 'Estimating labor and durations...' },
+  generating_summary: { progress: 94, message: 'Generating the estimator summary...' },
+  complete: { progress: 100, message: 'Analysis complete.' },
+  error: { progress: 100, message: 'Analysis failed.' },
+} as const;
+
+const PDF_WORKER_SRC = pathToFileURL(
+  join(process.cwd(), 'node_modules', 'pdf-parse', 'dist', 'pdf-parse', 'web', 'pdf.worker.mjs')
+).href;
+
 async function extractTextFromFile(filePath: string, fileType: string): Promise<string> {
   try {
     if (fileType === 'pdf') {
-      const pdfParse = (await import('pdf-parse')) as unknown as (buffer: Buffer) => Promise<{ text: string }>;
+      const { PDFParse } = await import('pdf-parse');
       const buffer = await readFile(filePath);
-      const data = await pdfParse(buffer);
-      return data.text || '';
+      PDFParse.setWorker(PDF_WORKER_SRC);
+      const parser = new PDFParse({ data: buffer });
+
+      try {
+        const data = await parser.getText();
+        return data.text || '';
+      } finally {
+        await parser.destroy().catch(() => undefined);
+      }
     }
 
     if (fileType === 'text') {
@@ -124,30 +138,189 @@ async function extractTextFromFile(filePath: string, fileType: string): Promise<
 
 function mergeStringLists(base: string[] | undefined, incoming: string[] | undefined): string[] | undefined {
   const merged = [...(base ?? []), ...(incoming ?? [])]
-    .map((value) => value?.trim())
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
     .filter((value): value is string => Boolean(value));
 
   return merged.length ? Array.from(new Set(merged)) : undefined;
 }
 
-function mergeMetadata(current: ExtractedMetadata, incoming: ExtractedMetadata): ExtractedMetadata {
+function normalizeStringValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const normalized = value
+    .map((item) => normalizeStringValue(item))
+    .filter((item): item is string => Boolean(item));
+
+  return normalized.length ? normalized : undefined;
+}
+
+type MetadataScalarField =
+  | 'projectName'
+  | 'client'
+  | 'contact'
+  | 'email'
+  | 'bidDueDate'
+  | 'rfiDueDate'
+  | 'address'
+  | 'city'
+  | 'state'
+  | 'zipCode'
+  | 'projectSize'
+  | 'trade';
+
+const METADATA_PLACEHOLDER_REGEX = /\b(tbd|pending|unknown|n\/a|na|to be determined|not provided|not available)\b/i;
+const METADATA_EMAIL_REGEX = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
+const METADATA_STATE_REGEX = /^[A-Z]{2}$/;
+const METADATA_ZIP_REGEX = /^\d{5}(?:-\d{4})?$/;
+const METADATA_ADDRESS_REGEX =
+  /\b\d{2,6}\s+[A-Za-z0-9.'#\- ]+\b(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Boulevard|Blvd|Lane|Ln|Way|Court|Ct|Circle|Cir|Trail|Trl|Highway|Hwy|Freeway|Fwy|Parkway|Pkwy|Loop|Terrace|Ter)\b\.?/i;
+
+function isWeakMetadataValue(field: MetadataScalarField, value: string | undefined) {
+  if (!value) {
+    return true;
+  }
+
+  if (METADATA_PLACEHOLDER_REGEX.test(value)) {
+    return true;
+  }
+
+  switch (field) {
+    case 'email':
+      return !METADATA_EMAIL_REGEX.test(value);
+    case 'bidDueDate':
+    case 'rfiDueDate':
+      return !safeDate(value);
+    case 'state':
+      return !METADATA_STATE_REGEX.test(value.trim().toUpperCase());
+    case 'zipCode':
+      return !METADATA_ZIP_REGEX.test(value.trim());
+    case 'address':
+      return !METADATA_ADDRESS_REGEX.test(value) || value.length > 180;
+    case 'trade':
+      return !findTradeOption(value);
+    case 'city':
+      return /\d/.test(value) || value.length > 60;
+    case 'projectName':
+      return value.length > 140 || /^(?:project|project name|job name|information|details)$/i.test(value);
+    case 'client':
+      return value.length > 140 || METADATA_EMAIL_REGEX.test(value) || /^(?:client|gc|owner|contractor)$/i.test(value);
+    case 'contact':
+      return value.length > 100 || METADATA_EMAIL_REGEX.test(value);
+    case 'projectSize':
+      return value.length > 60;
+    default:
+      return false;
+  }
+}
+
+function shouldPreferIncomingMetadataValue(
+  field: MetadataScalarField,
+  current: string | undefined,
+  incoming: string | undefined,
+  preferIncomingTrustedSignals: boolean,
+) {
+  if (!incoming) {
+    return false;
+  }
+
+  if (!current) {
+    return true;
+  }
+
+  if (!preferIncomingTrustedSignals) {
+    return false;
+  }
+
+  const currentWeak = isWeakMetadataValue(field, current);
+  const incomingWeak = isWeakMetadataValue(field, incoming);
+
+  if (currentWeak && !incomingWeak) {
+    return true;
+  }
+
+  if (incomingWeak) {
+    return false;
+  }
+
+  switch (field) {
+    case 'projectName':
+    case 'client':
+    case 'contact':
+      return current.length > incoming.length * 1.6;
+    case 'email':
+      return !METADATA_EMAIL_REGEX.test(current) && METADATA_EMAIL_REGEX.test(incoming);
+    case 'bidDueDate':
+    case 'rfiDueDate':
+      return !safeDate(current) && Boolean(safeDate(incoming));
+    case 'address':
+      return !METADATA_ADDRESS_REGEX.test(current) && METADATA_ADDRESS_REGEX.test(incoming);
+    case 'state':
+      return !METADATA_STATE_REGEX.test(current.trim().toUpperCase()) && METADATA_STATE_REGEX.test(incoming.trim().toUpperCase());
+    case 'zipCode':
+      return !METADATA_ZIP_REGEX.test(current.trim()) && METADATA_ZIP_REGEX.test(incoming.trim());
+    case 'trade':
+      return Boolean(findTradeOption(incoming) && !findTradeOption(current));
+    case 'city':
+      return /\d/.test(current) && !/\d/.test(incoming);
+    default:
+      return false;
+  }
+}
+
+function pickMergedMetadataValue(
+  field: MetadataScalarField,
+  current: unknown,
+  incoming: unknown,
+  preferIncomingTrustedSignals: boolean,
+) {
+  const currentValue = normalizeStringValue(current);
+  const incomingValue = normalizeStringValue(incoming);
+
+  if (shouldPreferIncomingMetadataValue(field, currentValue, incomingValue, preferIncomingTrustedSignals)) {
+    return incomingValue;
+  }
+
+  return currentValue || incomingValue;
+}
+
+export function mergeMetadata(
+  current: ExtractedMetadata,
+  incoming: ExtractedMetadata,
+  options?: { preferIncomingTrustedSignals?: boolean },
+): ExtractedMetadata {
+  const preferIncomingTrustedSignals = options?.preferIncomingTrustedSignals ?? false;
+
   return {
-    projectName: current.projectName || incoming.projectName,
-    client: current.client || incoming.client,
-    contact: current.contact || incoming.contact,
-    email: current.email || incoming.email,
-    bidDueDate: current.bidDueDate || incoming.bidDueDate,
-    rfiDueDate: current.rfiDueDate || incoming.rfiDueDate,
-    address: current.address || incoming.address,
-    city: current.city || incoming.city,
-    state: current.state || incoming.state,
-    zipCode: current.zipCode || incoming.zipCode,
-    projectSize: current.projectSize || incoming.projectSize,
-    trade: current.trade || incoming.trade,
-    scopeHints: mergeStringLists(current.scopeHints, incoming.scopeHints),
-    proposalReqs: mergeStringLists(current.proposalReqs, incoming.proposalReqs),
-    insuranceReqs: mergeStringLists(current.insuranceReqs, incoming.insuranceReqs),
-    scheduleConstraints: mergeStringLists(current.scheduleConstraints, incoming.scheduleConstraints),
+    projectName: pickMergedMetadataValue('projectName', current.projectName, incoming.projectName, preferIncomingTrustedSignals),
+    client: pickMergedMetadataValue('client', current.client, incoming.client, preferIncomingTrustedSignals),
+    contact: pickMergedMetadataValue('contact', current.contact, incoming.contact, preferIncomingTrustedSignals),
+    email: pickMergedMetadataValue('email', current.email, incoming.email, preferIncomingTrustedSignals),
+    bidDueDate: pickMergedMetadataValue('bidDueDate', current.bidDueDate, incoming.bidDueDate, preferIncomingTrustedSignals),
+    rfiDueDate: pickMergedMetadataValue('rfiDueDate', current.rfiDueDate, incoming.rfiDueDate, preferIncomingTrustedSignals),
+    address: pickMergedMetadataValue('address', current.address, incoming.address, preferIncomingTrustedSignals),
+    city: pickMergedMetadataValue('city', current.city, incoming.city, preferIncomingTrustedSignals),
+    state: pickMergedMetadataValue('state', current.state, incoming.state, preferIncomingTrustedSignals),
+    zipCode: pickMergedMetadataValue('zipCode', current.zipCode, incoming.zipCode, preferIncomingTrustedSignals),
+    projectSize: pickMergedMetadataValue('projectSize', current.projectSize, incoming.projectSize, preferIncomingTrustedSignals),
+    trade: pickMergedMetadataValue('trade', current.trade, incoming.trade, preferIncomingTrustedSignals),
+    scopeHints: mergeStringLists(normalizeStringArray(current.scopeHints), normalizeStringArray(incoming.scopeHints)),
+    proposalReqs: mergeStringLists(normalizeStringArray(current.proposalReqs), normalizeStringArray(incoming.proposalReqs)),
+    insuranceReqs: mergeStringLists(normalizeStringArray(current.insuranceReqs), normalizeStringArray(incoming.insuranceReqs)),
+    scheduleConstraints: mergeStringLists(
+      normalizeStringArray(current.scheduleConstraints),
+      normalizeStringArray(incoming.scheduleConstraints)
+    ),
   };
 }
 
@@ -370,14 +543,91 @@ function stringifyJson(value: unknown): string | null {
   return JSON.stringify(value);
 }
 
-function uniqueStrings(values: string[]): string[] {
+function uniqueStrings(values: unknown[]): string[] {
   return Array.from(
-    new Set(values.map((value) => value.trim()).filter(Boolean))
+    new Set(
+      values
+        .map((value) => normalizeStringValue(value))
+        .filter((value): value is string => Boolean(value))
+    )
   );
 }
 
-function normalizeTradeToken(value: string) {
-  return value
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function normalizeSheetReferences(value: unknown): Array<{ number?: string; title?: string }> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const normalized: Array<{ number?: string; title?: string }> = [];
+
+  for (const item of value) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+
+    const record = item as Record<string, unknown>;
+    const number = normalizeStringValue(record.number);
+    const title = normalizeStringValue(record.title);
+
+    if (!number && !title) {
+      continue;
+    }
+
+    normalized.push({ number, title });
+  }
+
+  return normalized.length ? normalized : undefined;
+}
+
+function normalizeClassification(value: unknown): ClassificationResult {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    category: normalizeStringValue(record.category),
+    confidence: typeof record.confidence === 'number' ? record.confidence : undefined,
+    summary: normalizeStringValue(record.summary),
+    keywords: normalizeStringArray(record.keywords),
+    relevantToTrade: typeof record.relevantToTrade === 'boolean' ? record.relevantToTrade : undefined,
+    reason: normalizeStringValue(record.reason),
+    sheetReferences: normalizeSheetReferences(record.sheetReferences),
+  };
+}
+
+async function setAnalysisStatus(projectId: string, status: string, error: string | null = null) {
+  await db.analysis.upsert({
+    where: { projectId },
+    create: { projectId, status, error },
+    update: { status, error },
+  });
+}
+
+function getAnalysisProgress(status: string | null | undefined) {
+  const normalizedStatus = status && status in ANALYSIS_PROGRESS ? status as keyof typeof ANALYSIS_PROGRESS : 'extracting';
+  return {
+    status: normalizedStatus,
+    progress: ANALYSIS_PROGRESS[normalizedStatus].progress,
+    message: ANALYSIS_PROGRESS[normalizedStatus].message,
+  };
+}
+
+function normalizeTradeToken(value: unknown) {
+  const normalizedValue = normalizeStringValue(value);
+  if (!normalizedValue) {
+    return '';
+  }
+
+  return normalizedValue
     .trim()
     .toLowerCase()
     .replace(/&/g, ' and ')
@@ -385,11 +635,7 @@ function normalizeTradeToken(value: string) {
     .replace(/^_+|_+$/g, '');
 }
 
-function findTradeOption(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
+function findTradeOption(value: unknown) {
   const normalized = normalizeTradeToken(value);
   if (!normalized) {
     return null;
@@ -445,8 +691,19 @@ export async function POST(
       data: { status: 'processing' },
     });
 
+    await setAnalysisStatus(projectId, 'extracting');
+
     void (async () => {
       try {
+        const logStepStart = (step: string) => {
+          console.log(`[analysis:${projectId}] ${step}`);
+          return Date.now();
+        };
+
+        const logStepComplete = (step: string, startedAt: number) => {
+          console.log(`[analysis:${projectId}] ${step} complete in ${Date.now() - startedAt}ms`);
+        };
+
         const selectedTrade = findTradeOption(project.trade);
         let tradeKeywords = [...(selectedTrade?.keywords ?? [])];
         let tradeLabel = selectedTrade?.label || project.trade || 'General';
@@ -455,6 +712,7 @@ export async function POST(
         let extractedMetadata: ExtractedMetadata = {};
         const fileContents: FileExcerpt[] = [];
 
+        const extractionStart = logStepStart('extracting documents');
         for (const file of processableFiles) {
           const text = await extractTextFromFile(file.filePath, file.fileType);
           if (!text.trim()) {
@@ -467,20 +725,59 @@ export async function POST(
             text: text.slice(0, 12000),
             fileType: file.fileType,
           });
+        }
+        logStepComplete('extracting documents', extractionStart);
 
-          if (fileContents.length <= 3 && text.length > 200) {
-            try {
-              const metadataPrompt = buildMetadataExtractionPrompt(text, file.originalName);
-              const metadataResult = await generateJson<ExtractedMetadata>({
-                prompt: metadataPrompt,
-                label: `metadata:${file.originalName}`,
-              });
-              extractedMetadata = mergeMetadata(extractedMetadata, metadataResult);
-            } catch (error) {
-              console.error(`Metadata extraction failed for ${file.originalName}:`, error);
+        const heuristicMetadata = extractHeuristicMetadataFromDocuments(
+          fileContents.map((file) => ({
+            fileName: file.fileName,
+            content: file.text,
+          }))
+        );
+
+        const metadataBatch = fileContents
+          .slice(0, 3)
+          .filter((file) => file.text.length > 200)
+          .map((file) => ({
+            fileId: file.fileId,
+            fileName: file.fileName,
+            content: file.text,
+          }));
+
+        if (metadataBatch.length) {
+          const metadataStart = logStepStart('extracting metadata');
+          try {
+            extractedMetadata = mergeMetadata(
+              extractedMetadata,
+              await generateJson<ExtractedMetadata>({
+                prompt: buildBatchMetadataExtractionPrompt(metadataBatch),
+                label: `metadata:${projectId}`,
+                timeoutMs: 120000,
+              })
+            );
+          } catch (error) {
+            console.error(`Batch metadata extraction failed for project ${projectId}:`, error);
+
+            for (const file of metadataBatch) {
+              try {
+                const metadataPrompt = buildBatchMetadataExtractionPrompt([file]);
+                const metadataResult = await generateJson<ExtractedMetadata>({
+                  prompt: metadataPrompt,
+                  label: `metadata:${file.fileName}`,
+                  timeoutMs: 90000,
+                });
+                extractedMetadata = mergeMetadata(extractedMetadata, metadataResult);
+              } catch (fileError) {
+                console.error(`Metadata extraction failed for ${file.fileName}:`, fileError);
+              }
             }
           }
+          logStepComplete('extracting metadata', metadataStart);
         }
+
+        extractedMetadata = mergeMetadata(extractedMetadata, heuristicMetadata, {
+          preferIncomingTrustedSignals: true,
+        });
 
         const inferredTrade = findTradeOption(extractedMetadata.trade);
         if (inferredTrade) {
@@ -492,58 +789,122 @@ export async function POST(
           storedTradeValue = extractedMetadata.trade;
         }
 
-        await db.analysis.upsert({
-          where: { projectId },
-          create: { projectId, status: 'processing' },
-          update: { status: 'processing', error: null },
-        });
+        await setAnalysisStatus(projectId, 'classifying');
 
         const classificationResults: Array<{ fileId: string; fileName: string; classification: ClassificationResult }> = [];
 
-        for (const excerpt of fileContents.slice(0, 15)) {
-          try {
-            const prompt = buildClassificationPrompt(excerpt.text, excerpt.fileName, tradeKeywords);
-            const classification = await generateJson<ClassificationResult>({
+        const classifyOne = async (excerpt: FileExcerpt) => {
+          const prompt = buildClassificationPrompt(excerpt.text, excerpt.fileName, tradeKeywords);
+          return normalizeClassification(
+            await generateJson<ClassificationResult>({
               prompt,
               label: `classification:${excerpt.fileName}`,
+              timeoutMs: 90000,
+            })
+          );
+        };
+
+        const classificationStart = logStepStart('classifying documents');
+        for (const batch of chunkArray(fileContents.slice(0, 15), 5)) {
+          try {
+            const batchPrompt = buildBatchClassificationPrompt(
+              batch.map((excerpt) => ({
+                fileId: excerpt.fileId,
+                fileName: excerpt.fileName,
+                content: excerpt.text,
+              })),
+              tradeKeywords
+            );
+
+            const batchResult = await generateJson<BatchClassificationResponse>({
+              prompt: batchPrompt,
+              label: `classification-batch:${projectId}:${batch[0]?.fileName ?? 'batch'}`,
+              timeoutMs: 120000,
             });
 
-            classificationResults.push({
-              fileId: excerpt.fileId,
-              fileName: excerpt.fileName,
-              classification,
-            });
+            const batchLookup = new Map(
+              (batchResult.documents ?? [])
+                .filter((document): document is ClassificationResult & { fileId: string } => typeof document?.fileId === 'string')
+                .map((document) => [document.fileId, normalizeClassification(document)])
+            );
 
-            await db.bidFile.update({
-              where: { id: excerpt.fileId },
-              data: {
-                category: classification.category || 'unknown',
-                summary: classification.summary || null,
-                relevanceScore: classification.relevantToTrade
-                  ? Math.max(0.55, classification.confidence || 0.55)
-                  : Math.min(0.5, classification.confidence || 0.35),
-                isRelevant: Boolean(classification.relevantToTrade),
-                isProcessed: true,
-                sheetData: classification.sheetReferences?.length
-                  ? stringifyJson(classification.sheetReferences)
-                  : null,
-                metadata: stringifyJson({
-                  keywords: classification.keywords ?? [],
-                  reason: classification.reason ?? null,
-                }),
-              },
-            });
-          } catch (error) {
-            console.error(`Classification failed for ${excerpt.fileName}:`, error);
-            await db.bidFile.update({
-              where: { id: excerpt.fileId },
-              data: {
-                isProcessed: true,
-                error: String(error),
-              },
-            });
+            for (const excerpt of batch) {
+              const classification = batchLookup.get(excerpt.fileId) ?? await classifyOne(excerpt);
+
+              classificationResults.push({
+                fileId: excerpt.fileId,
+                fileName: excerpt.fileName,
+                classification,
+              });
+
+              await db.bidFile.update({
+                where: { id: excerpt.fileId },
+                data: {
+                  category: classification.category || 'unknown',
+                  summary: classification.summary || null,
+                  relevanceScore: classification.relevantToTrade
+                    ? Math.max(0.55, classification.confidence || 0.55)
+                    : Math.min(0.5, classification.confidence || 0.35),
+                  isRelevant: Boolean(classification.relevantToTrade),
+                  isProcessed: true,
+                  error: null,
+                  sheetData: classification.sheetReferences?.length
+                    ? stringifyJson(classification.sheetReferences)
+                    : null,
+                  metadata: stringifyJson({
+                    keywords: classification.keywords ?? [],
+                    reason: classification.reason ?? null,
+                  }),
+                },
+              });
+            }
+          } catch (batchError) {
+            console.error(`Batch classification failed for project ${projectId}:`, batchError);
+
+            for (const excerpt of batch) {
+              try {
+                const classification = await classifyOne(excerpt);
+
+                classificationResults.push({
+                  fileId: excerpt.fileId,
+                  fileName: excerpt.fileName,
+                  classification,
+                });
+
+                await db.bidFile.update({
+                  where: { id: excerpt.fileId },
+                  data: {
+                    category: classification.category || 'unknown',
+                    summary: classification.summary || null,
+                    relevanceScore: classification.relevantToTrade
+                      ? Math.max(0.55, classification.confidence || 0.55)
+                      : Math.min(0.5, classification.confidence || 0.35),
+                    isRelevant: Boolean(classification.relevantToTrade),
+                    isProcessed: true,
+                    error: null,
+                    sheetData: classification.sheetReferences?.length
+                      ? stringifyJson(classification.sheetReferences)
+                      : null,
+                    metadata: stringifyJson({
+                      keywords: classification.keywords ?? [],
+                      reason: classification.reason ?? null,
+                    }),
+                  },
+                });
+              } catch (error) {
+                console.error(`Classification failed for ${excerpt.fileName}:`, error);
+                await db.bidFile.update({
+                  where: { id: excerpt.fileId },
+                  data: {
+                    isProcessed: true,
+                    error: String(error),
+                  },
+                });
+              }
+            }
           }
         }
+        logStepComplete('classifying documents', classificationStart);
 
         const classifiedDocsSummary = classificationResults
           .map(({ fileName, classification }) => {
@@ -553,6 +914,7 @@ export async function POST(
           })
           .join('\n');
 
+        await setAnalysisStatus(projectId, 'analyzing_scope');
         const scopePrompt = buildScopeAnalysisPrompt(
           JSON.stringify(extractedMetadata, null, 2),
           classifiedDocsSummary,
@@ -560,32 +922,21 @@ export async function POST(
           tradeKeywords as string[]
         );
 
+        const scopeStart = logStepStart('analyzing scope');
         const scopeData = await generateJson<ScopeAnalysisResult>({
           prompt: scopePrompt,
           label: `scope:${projectId}`,
+          timeoutMs: 120000,
         });
+        logStepComplete('analyzing scope', scopeStart);
 
+        await setAnalysisStatus(projectId, 'analyzing_weather');
         const locationQuery = buildLocationQuery(project, extractedMetadata);
+        const weatherStart = logStepStart('analyzing weather');
         const weatherImpact = await getWeatherImpact(locationQuery, project.trade ?? tradeLabel);
+        logStepComplete('analyzing weather', weatherStart);
 
-        const summaryPrompt = buildExecutiveSummaryPrompt(
-          JSON.stringify(
-            {
-              metadata: extractedMetadata,
-              classifications: classificationResults,
-              scope: scopeData,
-              weatherImpact,
-            },
-            null,
-            2
-          )
-        );
-
-        const executiveData = await generateJson<ExecutiveSummaryResult>({
-          prompt: summaryPrompt,
-          label: `summary:${projectId}`,
-        });
-
+        await setAnalysisStatus(projectId, 'estimating_time');
         const timePrompt = buildTimeEstimatePrompt(
           tradeLabel,
           scopeData.probableScope || '',
@@ -594,10 +945,36 @@ export async function POST(
           weatherImpact?.impactSummary || 'No weather impact available'
         );
 
+        const timeStart = logStepStart('estimating time');
         const timeData = await generateJson<Partial<TimeEstimate>>({
           prompt: timePrompt,
           label: `time:${projectId}`,
+          timeoutMs: 90000,
         });
+        logStepComplete('estimating time', timeStart);
+
+        await setAnalysisStatus(projectId, 'generating_summary');
+        const summaryPrompt = buildExecutiveSummaryPrompt(
+          JSON.stringify(
+            {
+              metadata: extractedMetadata,
+              classifications: classificationResults,
+              scope: scopeData,
+              weatherImpact,
+              timeEstimate: timeData,
+            },
+            null,
+            2
+          )
+        );
+
+        const summaryStart = logStepStart('generating summary');
+        const executiveData = await generateJson<ExecutiveSummaryResult>({
+          prompt: summaryPrompt,
+          label: `summary:${projectId}`,
+          timeoutMs: 120000,
+        });
+        logStepComplete('generating summary', summaryStart);
 
         const relevantFilesCount = classificationResults.filter((item) => item.classification.relevantToTrade).length;
         const normalizedRisks = normalizeRiskItems(scopeData.risks ?? executiveData.risks);
@@ -770,11 +1147,7 @@ export async function POST(
         console.log(`Analysis complete for project ${projectId}`);
       } catch (error) {
         console.error(`Analysis failed for project ${projectId}:`, error);
-        await db.analysis.upsert({
-          where: { projectId },
-          create: { projectId, status: 'error', error: String(error) },
-          update: { status: 'error', error: String(error) },
-        });
+        await setAnalysisStatus(projectId, 'error', String(error));
         await db.project.update({
           where: { id: projectId },
           data: { status: 'error' },
@@ -801,7 +1174,20 @@ export async function GET(
   try {
     const { id: projectId } = await params;
     const analysis = await db.analysis.findUnique({ where: { projectId } });
-    return NextResponse.json(analysis);
+    if (!analysis) {
+      return NextResponse.json({
+        status: 'idle',
+        progress: 0,
+        message: 'Waiting to start analysis...',
+      });
+    }
+
+    const progress = getAnalysisProgress(analysis.status);
+    return NextResponse.json({
+      ...analysis,
+      progress: progress.progress,
+      message: analysis.status === 'error' ? analysis.error || progress.message : progress.message,
+    });
   } catch (error) {
     console.error('Error fetching analysis:', error);
     return NextResponse.json({ error: 'Failed to fetch analysis' }, { status: 500 });

@@ -1,3 +1,23 @@
+type PromptDocumentInput = {
+  fileId?: string;
+  fileName: string;
+  content: string;
+};
+
+function renderPromptDocuments(documents: PromptDocumentInput[], contentLimit = 3000): string {
+  return documents
+    .map((document, index) => {
+      return [
+        `Document ${index + 1}`,
+        `File ID: ${document.fileId ?? `doc-${index + 1}`}`,
+        `File name: ${document.fileName}`,
+        'Content:',
+        document.content.slice(0, contentLimit),
+      ].join('\n');
+    })
+    .join('\n\n---\n\n');
+}
+
 export function buildClassificationPrompt(fileContent: string, fileName: string, tradeKeywords: string[]): string {
   return `You are a construction document classification expert. Analyze the following document content and classify it.
 
@@ -40,6 +60,58 @@ Respond in JSON format:
   "sheetReferences": [{"number": "...", "title": "..."}]
 }
 
+Return valid JSON only. Do not wrap the response in Markdown fences.`;
+}
+
+export function buildBatchClassificationPrompt(
+  documents: PromptDocumentInput[],
+  tradeKeywords: string[]
+): string {
+  return `You are a construction document classification expert. Analyze each document independently.
+
+DOCUMENTS:
+${renderPromptDocuments(documents, 2500)}
+
+Trade keywords for relevance: ${tradeKeywords.join(', ')}
+
+Classify each document into ONE of these categories:
+- drawings: Construction drawings, plans, blueprints, floor plans, elevations, sections, details, schedules
+- addenda: Addenda, amendments, supplements to the project
+- specifications: Project manual, specifications, technical requirements, Divisions 01-49
+- civil: Civil engineering, site plans, grading, drainage, utilities
+- structural: Structural drawings, calculations, steel, concrete design
+- architectural: Architectural drawings, floor plans, elevations, finishes
+- mep: Mechanical, Electrical, Plumbing drawings and specs
+- site: Site work, landscaping, parking, paving
+- geotech: Geotechnical reports, soil analysis, borings
+- fire_protection: Fire sprinkler, alarm, suppression systems
+- bid_forms: Bid forms, instructions to bidders, proposal forms
+- rfi: RFI responses, submittals, clarification letters
+- irrelevant: Marketing materials, unrelated content, duplicates
+
+For each document also provide:
+1. A brief summary (1-2 sentences) of what the document contains
+2. Key terms and keywords found
+3. Whether this document is relevant to the trade (based on trade keywords)
+4. If relevant, what specific sections/sheets should be reviewed
+
+Respond in JSON format:
+{
+  "documents": [
+    {
+      "fileId": "<use the exact File ID provided above>",
+      "category": "<category>",
+      "confidence": 0.0-1.0,
+      "summary": "...",
+      "keywords": ["..."],
+      "relevantToTrade": true,
+      "reason": "...",
+      "sheetReferences": [{"number": "...", "title": "..."}]
+    }
+  ]
+}
+
+Return one result for every document.
 Return valid JSON only. Do not wrap the response in Markdown fences.`;
 }
 
@@ -207,6 +279,47 @@ File: ${fileName}
 
 Content:
 ${fileContent.slice(0, 5000)}
+
+Respond in JSON format with only the fields you can confidently extract. Use null for fields not found:
+{
+  "projectName": null,
+  "client": null,
+  "contact": null,
+  "email": null,
+  "bidDueDate": null,
+  "rfiDueDate": null,
+  "address": null,
+  "city": null,
+  "state": null,
+  "zipCode": null,
+  "projectSize": null,
+  "trade": null,
+  "scopeHints": [],
+  "proposalReqs": [],
+  "insuranceReqs": [],
+  "scheduleConstraints": []
+}
+
+Return valid JSON only. Do not wrap the response in Markdown fences.`;
+}
+
+export function buildBatchMetadataExtractionPrompt(documents: PromptDocumentInput[]): string {
+  return `Extract merged project metadata from these construction documents. Combine the signals across the set and only include fields you can support from the content.
+
+Look for:
+- Project name
+- Client / GC / contact name / email
+- Bid due date
+- RFI due date
+- Address / city / state / zip
+- Project size (sq ft, acres, etc.)
+- The single most relevant trade name if it is clear
+- Scope descriptions
+- Proposal requirements
+- Insurance/bond requirements
+
+DOCUMENTS:
+${renderPromptDocuments(documents, 4000)}
 
 Respond in JSON format with only the fields you can confidently extract. Use null for fields not found:
 {

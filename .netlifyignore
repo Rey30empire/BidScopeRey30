@@ -1,0 +1,27 @@
+# Local dependencies and build artifacts
+node_modules/
+.next/
+.turbo/
+
+# Local data and uploaded bid packages
+uploads/
+upload/
+download/
+db/
+BitScopeRey30+Datos/
+
+# Local diagnostics and generated assets
+.zscripts/
+bat-run.log
+bat-test.log
+dev.log
+server.log
+
+# Repository / local environment
+.git/
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.vercel/

@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start -p 3000",
+    "start": "node .next/standalone/server.js",
     "lint": "eslint .",
     "check": "bun run lint && bun run build",
     "db:push": "prisma db push",
@@ -22,6 +22,7 @@
     "@hookform/resolvers": "^5.1.1",
     "@mdxeditor/editor": "^3.39.1",
     "@netlify/neon": "^0.1.2",
+    "@pdf-lib/fontkit": "^1.1.1",
     "@prisma/client": "^6.11.1",
     "@radix-ui/react-accordion": "^1.2.11",
     "@radix-ui/react-alert-dialog": "^1.1.14",

@@ -7,6 +7,7 @@ import { useTheme } from 'next-themes'
 import { useProjectStore, type ProjectData, type FileData, type AnalysisData } from '@/store/project-store'
 import { TRADE_OPTIONS, DOCUMENT_CATEGORIES, ANALYSIS_STEPS, CATEGORY_COLORS } from '@/lib/constants'
 import { APP_NAME, APP_SUMMARY, APP_TAGLINE } from '@/lib/branding'
+import { EstimateWorkbench } from '@/components/estimate/estimate-workbench'
 
 // ── shadcn/ui ──────────────────────────────────────────────────────────────
 import { Button } from '@/components/ui/button'
@@ -58,7 +59,7 @@ import {
   FileSpreadsheet, ImageIcon, FileDown, ChevronDown,
   CircleCheckBig, TriangleAlert, CircleX, Lightbulb,
   Wrench, Activity, DollarSign, Scale, Layers, Package,
-  CheckCircle2, XCircle, Eye, FileSearch, Mail
+  CheckCircle2, XCircle, Eye, FileSearch
 } from 'lucide-react'
 
 // ── Animation variants ─────────────────────────────────────────────────────
@@ -2107,194 +2108,8 @@ function RiskRfiTab({ project, analysis }: { project: ProjectData; analysis: Ana
 }
 
 // ── Tab 5: Estimate ───────────────────────────────────────────────────────
-function EstimateTab({ project, analysis }: { project: ProjectData; analysis: AnalysisData }) {
-  const { summary, time, materials } = useParsedAnalysis(analysis)
-  const estimate = time ?? summary?.timeEstimate ?? null
-
-  return (
-    <div className="space-y-6">
-      {/* Time Estimate */}
-      {estimate ? (
-        <>
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Clock className="size-4" />
-                Time Estimate
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                <div className="rounded-lg bg-muted p-4 text-center">
-                  <p className="text-2xl font-bold">{estimate.totalHours ?? '—'}</p>
-                  <p className="text-xs text-muted-foreground">Total Hours</p>
-                </div>
-                <div className="rounded-lg bg-muted p-4 text-center">
-                  <p className="text-2xl font-bold">{estimate.totalDays ?? '—'}</p>
-                  <p className="text-xs text-muted-foreground">Total Days</p>
-                </div>
-                <div className="rounded-lg bg-muted p-4 text-center">
-                  <p className="text-2xl font-bold">{estimate.crewSize ?? '—'}</p>
-                  <p className="text-xs text-muted-foreground">Crew Size</p>
-                </div>
-                <div className="rounded-lg bg-muted p-4 text-center">
-                  <p className="text-2xl font-bold">
-                    {estimate.totalDays && estimate.crewSize
-                      ? Math.round(estimate.totalDays * estimate.crewSize * 8)
-                      : '—'}
-                  </p>
-                  <p className="text-xs text-muted-foreground">Man Hours</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Work Phases */}
-          {estimate.phases && estimate.phases.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Activity className="size-4" />
-                  Work Phases
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {estimate.phases.map((phase, i) => (
-                    <div key={i} className="flex items-start gap-3 rounded-lg border p-3">
-                      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
-                        {i + 1}
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-sm font-medium">{phase.name ?? `Phase ${i + 1}`}</p>
-                        {phase.description && (
-                          <p className="mt-0.5 text-xs text-muted-foreground">{phase.description}</p>
-                        )}
-                        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1">
-                            <Clock className="size-3" /> {phase.hours ?? 0}h
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Calendar className="size-3" /> {phase.days ?? 0}d
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Users className="size-3" /> {phase.crew ?? 0} crew
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Time Risks & Assumptions */}
-          {(estimate.risks?.length || estimate.assumptions?.length) && (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              {estimate.risks && estimate.risks.length > 0 && (
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <AlertTriangle className="size-4 text-amber-500" />
-                      Time Risks
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ul className="space-y-1.5">
-                      {estimate.risks.map((risk, i) => (
-                        <li key={i} className="flex items-start gap-2 text-sm">
-                          <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
-                          <span>{risk}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </CardContent>
-                </Card>
-              )}
-              {estimate.assumptions && estimate.assumptions.length > 0 && (
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <Info className="size-4 text-blue-500" />
-                      Assumptions
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ul className="space-y-1.5">
-                      {estimate.assumptions.map((assumption, i) => (
-                        <li key={i} className="flex items-start gap-2 text-sm">
-                          <CircleDot className="mt-0.5 size-3.5 shrink-0 text-blue-500" />
-                          <span>{assumption}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-          )}
-        </>
-      ) : (
-        <Card>
-          <CardContent className="flex flex-col items-center py-10">
-            <Clock className="mb-3 size-8 text-muted-foreground" />
-            <p className="font-medium">No time estimate available</p>
-            <p className="text-sm text-muted-foreground">Run the analysis to generate time estimates.</p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Materials Detected */}
-      {materials.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Package className="size-4" />
-              Materials Detected ({materials.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ScrollArea className="max-h-72">
-              <div className="space-y-2">
-                {materials.map((mat, i) => (
-                  <div key={i} className="flex items-center justify-between rounded-lg border p-3">
-                    <div>
-                      <p className="text-sm font-medium">{mat.name}</p>
-                      {mat.category && (
-                        <p className="text-xs text-muted-foreground">{mat.category}</p>
-                      )}
-                    </div>
-                    <div className="text-right">
-                      {mat.estimatedQty !== undefined && mat.estimatedQty !== null && (
-                        <p className="text-sm font-medium">
-                          {mat.estimatedQty.toLocaleString()} {mat.unit ?? ''}
-                        </p>
-                      )}
-                      {mat.notes && (
-                        <p className="text-xs text-muted-foreground">{mat.notes}</p>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* No materials note */}
-      {materials.length === 0 && !estimate && (
-        <Card>
-          <CardContent className="flex flex-col items-center py-10">
-            <Package className="mb-3 size-8 text-muted-foreground" />
-            <p className="font-medium">No estimate data available</p>
-            <p className="text-sm text-muted-foreground">Run the analysis to generate estimates.</p>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  )
+function EstimateTab({ project }: { project: ProjectData; analysis: AnalysisData }) {
+  return <EstimateWorkbench project={project} />
 }
 
 // ── Reusable: Info Item ───────────────────────────────────────────────────
@@ -2515,8 +2330,6 @@ function ResultsView() {
     fetchProject()
   }, [currentProject?.id, setStep, setCurrentProject])
 
-  const [sendingEmail, setSendingEmail] = useState(false)
-
   const handleExport = async (format: 'json' | 'csv' | 'pdf') => {
     if (!currentProject) return
     try {
@@ -2534,30 +2347,6 @@ function ResultsView() {
       toast.success(`Exported as ${format.toUpperCase()}`)
     } catch {
       toast.error('Export failed')
-    }
-  }
-
-  const handleSendEstimateEmail = async () => {
-    if (!currentProject) return
-
-    setSendingEmail(true)
-    try {
-      const res = await fetch(`/api/projects/${currentProject.id}/email`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      })
-      const data = await res.json().catch(() => ({}))
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Email failed')
-      }
-
-      toast.success(`Estimate emailed to ${data.to}`)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Email failed')
-    } finally {
-      setSendingEmail(false)
     }
   }
 
@@ -2632,16 +2421,6 @@ function ResultsView() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleSendEstimateEmail}
-            disabled={sendingEmail}
-            className="gap-2"
-          >
-            {sendingEmail ? <Loader2 className="size-4 animate-spin" /> : <Mail className="size-4" />}
-            Email Test
-          </Button>
           <Button variant="outline" size="sm" onClick={() => setStep('list')} className="gap-2">
             <FolderOpen className="size-4" />
             All Projects
@@ -2704,6 +2483,34 @@ function ResultsView() {
 // ══════════════════════════════════════════════════════════════════════════
 export default function Home() {
   const currentStep = useProjectStore((s) => s.currentStep)
+  const setCurrentProject = useProjectStore((s) => s.setCurrentProject)
+  const setStep = useProjectStore((s) => s.setStep)
+
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search)
+    const projectId = searchParams.get('project')
+    if (!projectId) return
+
+    let cancelled = false
+
+    async function hydrateFromUrl() {
+      try {
+        const res = await fetch(`/api/projects/${projectId}`)
+        if (!res.ok) return
+        const project = await res.json()
+        if (cancelled) return
+        setCurrentProject(project)
+        setStep(project.status === 'processing' ? 'processing' : project.analysis ? 'results' : 'upload')
+      } catch {
+        // Ignore URL hydration failures and let the normal app flow continue
+      }
+    }
+
+    hydrateFromUrl()
+    return () => {
+      cancelled = true
+    }
+  }, [setCurrentProject, setStep])
 
   return (
     <div className="flex min-h-screen flex-col">
