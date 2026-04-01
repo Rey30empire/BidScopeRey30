@@ -204,6 +204,92 @@ const BASE_TABLE_SQL = [
   `,
 ] as const;
 
+const PROJECT_COLUMNS: ColumnDefinition[] = [
+  { name: 'name', definition: `TEXT NOT NULL DEFAULT ''` },
+  { name: 'client', definition: 'TEXT' },
+  { name: 'location', definition: 'TEXT' },
+  { name: 'address', definition: 'TEXT' },
+  { name: 'city', definition: 'TEXT' },
+  { name: 'state', definition: 'TEXT' },
+  { name: 'zip', definition: 'TEXT' },
+  { name: 'projectSize', definition: 'TEXT' },
+  { name: 'trade', definition: 'TEXT' },
+  { name: 'status', definition: `TEXT NOT NULL DEFAULT 'upload'` },
+  { name: 'bidDueDate', definition: 'TIMESTAMP(3)' },
+  { name: 'rfiDueDate', definition: 'TIMESTAMP(3)' },
+  { name: 'notes', definition: 'TEXT' },
+  { name: 'createdAt', definition: 'TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP' },
+  { name: 'updatedAt', definition: 'TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP' },
+];
+
+const BID_FILE_COLUMNS: ColumnDefinition[] = [
+  { name: 'projectId', definition: `TEXT NOT NULL DEFAULT ''` },
+  { name: 'originalName', definition: `TEXT NOT NULL DEFAULT ''` },
+  { name: 'fileName', definition: `TEXT NOT NULL DEFAULT ''` },
+  { name: 'filePath', definition: `TEXT NOT NULL DEFAULT ''` },
+  { name: 'fileType', definition: `TEXT NOT NULL DEFAULT 'other'` },
+  { name: 'fileSize', definition: 'INTEGER NOT NULL DEFAULT 0' },
+  { name: 'mimeType', definition: 'TEXT' },
+  { name: 'hash', definition: 'TEXT' },
+  { name: 'category', definition: 'TEXT' },
+  { name: 'relevanceScore', definition: 'DOUBLE PRECISION' },
+  { name: 'summary', definition: 'TEXT' },
+  { name: 'sheetData', definition: 'TEXT' },
+  { name: 'metadata', definition: 'TEXT' },
+  { name: 'isRelevant', definition: 'BOOLEAN' },
+  { name: 'isProcessed', definition: 'BOOLEAN NOT NULL DEFAULT FALSE' },
+  { name: 'error', definition: 'TEXT' },
+  { name: 'createdAt', definition: 'TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP' },
+  { name: 'updatedAt', definition: 'TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP' },
+];
+
+const ANALYSIS_COLUMNS: ColumnDefinition[] = [
+  { name: 'projectId', definition: `TEXT NOT NULL DEFAULT ''` },
+  { name: 'projectName', definition: 'TEXT' },
+  { name: 'client', definition: 'TEXT' },
+  { name: 'contact', definition: 'TEXT' },
+  { name: 'email', definition: 'TEXT' },
+  { name: 'bidDueDate', definition: 'TEXT' },
+  { name: 'rfiDueDate', definition: 'TEXT' },
+  { name: 'address', definition: 'TEXT' },
+  { name: 'city', definition: 'TEXT' },
+  { name: 'state', definition: 'TEXT' },
+  { name: 'zipCode', definition: 'TEXT' },
+  { name: 'trade', definition: 'TEXT' },
+  { name: 'scopeHints', definition: 'TEXT' },
+  { name: 'alternates', definition: 'TEXT' },
+  { name: 'allowances', definition: 'TEXT' },
+  { name: 'proposalReqs', definition: 'TEXT' },
+  { name: 'insuranceReqs', definition: 'TEXT' },
+  { name: 'scheduleConstraints', definition: 'TEXT' },
+  { name: 'addendaNotes', definition: 'TEXT' },
+  { name: 'keySpecs', definition: 'TEXT' },
+  { name: 'materials', definition: 'TEXT' },
+  { name: 'relevantSheets', definition: 'TEXT' },
+  { name: 'scopeAnalysis', definition: 'TEXT' },
+  { name: 'weatherImpact', definition: 'TEXT' },
+  { name: 'timeEstimate', definition: 'TEXT' },
+  { name: 'executiveSummary', definition: 'TEXT' },
+  { name: 'riskItems', definition: 'TEXT' },
+  { name: 'rfiSuggestions', definition: 'TEXT' },
+  { name: 'costEstimate', definition: 'TEXT' },
+  { name: 'inclusions', definition: 'TEXT' },
+  { name: 'exclusions', definition: 'TEXT' },
+  { name: 'confidence', definition: 'DOUBLE PRECISION' },
+  { name: 'status', definition: `TEXT NOT NULL DEFAULT 'pending'` },
+  { name: 'error', definition: 'TEXT' },
+  { name: 'createdAt', definition: 'TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP' },
+  { name: 'updatedAt', definition: 'TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP' },
+];
+
+const SETTINGS_COLUMNS: ColumnDefinition[] = [
+  { name: 'id', definition: `TEXT NOT NULL DEFAULT 'default'` },
+  { name: 'key', definition: `TEXT NOT NULL DEFAULT ''` },
+  { name: 'value', definition: `TEXT NOT NULL DEFAULT ''` },
+  { name: 'createdAt', definition: 'TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP' },
+  { name: 'updatedAt', definition: 'TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP' },
+];
+
 const ESTIMATE_COLUMNS: ColumnDefinition[] = [
   { name: 'estimateType', definition: 'TEXT' },
   { name: 'estimateNumber', definition: 'TEXT' },
@@ -593,6 +679,10 @@ async function main() {
   }
 
   await ensureTables();
+  await ensureColumns('Project', PROJECT_COLUMNS);
+  await ensureColumns('BidFile', BID_FILE_COLUMNS);
+  await ensureColumns('Analysis', ANALYSIS_COLUMNS);
+  await ensureColumns('Settings', SETTINGS_COLUMNS);
   await ensureColumns('Estimate', ESTIMATE_COLUMNS);
   await ensureColumns('EstimateSend', ESTIMATE_SEND_COLUMNS);
   await ensureColumns('EstimateOpenEvent', ESTIMATE_OPEN_EVENT_COLUMNS);
