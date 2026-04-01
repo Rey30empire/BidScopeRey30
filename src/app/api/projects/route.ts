@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { listProjectsWithFilesAndAnalysis } from '@/lib/server/project-query-service';
 
 function buildDraftProjectName(name?: string | null) {
   const trimmed = name?.trim();
@@ -27,13 +28,7 @@ function parseOptionalDate(value: string | null | undefined) {
 // GET /api/projects - List all projects
 export async function GET() {
   try {
-    const projects = await db.project.findMany({
-      orderBy: { createdAt: 'desc' },
-      include: {
-        files: { orderBy: { createdAt: 'desc' } },
-        analysis: true,
-      },
-    });
+    const projects = await listProjectsWithFilesAndAnalysis();
     return NextResponse.json(projects);
   } catch (error) {
     console.error('Error fetching projects:', error);

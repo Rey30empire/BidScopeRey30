@@ -17,6 +17,7 @@ import {
   extractHeuristicMetadataFromDocuments,
   type ExtractedMetadata,
 } from '@/lib/server/project-metadata-extraction';
+import { getProjectWithFilesAndAnalysis } from '@/lib/server/project-query-service';
 import { getWeatherImpact } from '@/lib/server/weather';
 import type {
   ExecutiveSummary,
@@ -669,10 +670,7 @@ export async function POST(
 
     const { id: projectId } = await params;
 
-    const project = await db.project.findUnique({
-      where: { id: projectId },
-      include: { files: true, analysis: true },
-    });
+    const project = await getProjectWithFilesAndAnalysis(projectId);
 
     if (!project) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 });

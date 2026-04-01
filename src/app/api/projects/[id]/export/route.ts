@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
 import {
   buildProjectReport,
   buildProjectReportCsv,
   buildProjectReportPdf,
 } from '@/lib/server/report';
+import { getProjectWithFilesAndAnalysis } from '@/lib/server/project-query-service';
 
 // GET /api/projects/[id]/export - Export analysis results
 export async function GET(
@@ -16,10 +16,7 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const format = searchParams.get('format') || 'json';
 
-    const project = await db.project.findUnique({
-      where: { id: projectId },
-      include: { files: true, analysis: true },
-    });
+    const project = await getProjectWithFilesAndAnalysis(projectId);
 
     if (!project) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 });

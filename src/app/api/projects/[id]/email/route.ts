@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
 import { getEmailConfigurationError, sendEstimateEmail } from '@/lib/server/email';
 import {
   buildProjectReport,
@@ -8,6 +7,7 @@ import {
   buildProjectReportPdf,
   buildProjectReportText,
 } from '@/lib/server/report';
+import { getProjectWithFilesAndAnalysis } from '@/lib/server/project-query-service';
 
 export async function POST(
   request: NextRequest,
@@ -26,10 +26,7 @@ export async function POST(
       return NextResponse.json({ error: configError }, { status: 500 });
     }
 
-    const project = await db.project.findUnique({
-      where: { id: projectId },
-      include: { files: true, analysis: true },
-    });
+    const project = await getProjectWithFilesAndAnalysis(projectId);
 
     if (!project) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 });

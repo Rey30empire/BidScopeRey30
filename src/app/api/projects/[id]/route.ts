@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getProjectWithFilesAndAnalysis } from '@/lib/server/project-query-service';
 
 function parseOptionalDate(value: string | null | undefined) {
   if (!value) {
@@ -22,13 +23,7 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const project = await db.project.findUnique({
-      where: { id },
-      include: {
-        files: { orderBy: { createdAt: 'desc' } },
-        analysis: true,
-      },
-    });
+    const project = await getProjectWithFilesAndAnalysis(id);
 
     if (!project) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 });
