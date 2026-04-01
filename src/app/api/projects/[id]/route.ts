@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getProjectWithFilesAndAnalysis } from '@/lib/server/project-query-service';
+import { deleteProjectDeep } from '@/lib/server/project-delete-service';
 
 function parseOptionalDate(value: string | null | undefined) {
   if (!value) {
@@ -102,8 +103,13 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    await db.project.delete({ where: { id } });
-    return NextResponse.json({ success: true });
+    const deleted = await deleteProjectDeep(id);
+
+    if (!deleted) {
+      return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+    }
+
+    return NextResponse.json({ success: true, deleted });
   } catch (error) {
     console.error('Error deleting project:', error);
     return NextResponse.json({ error: 'Failed to delete project' }, { status: 500 });
